@@ -1,0 +1,32 @@
+[package]
+name = "rs-steam-updater"
+version = "0.1.0"
+edition = "2021"
+description = "Bootstrap SteamCMD and update all Steam apps — a Rust port of Update-SteamApps.ps1"
+
+[[bin]]
+name = "rs-steam-updater"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = "1"
+reqwest = { version = "0.12", features = ["blocking", "rustls-tls", "json"], default-features = false }
+regex = "1"
+zip = "2"
+indexmap = { version = "2", features = ["serde"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Threading",
+] }
+
+[profile.release]
+opt-level = 3
+lto = true
