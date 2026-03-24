@@ -27,37 +27,7 @@ fn read_acf_installdir(acf_path: &std::path::Path) -> Option<String> {
     parse_installdir(&text)
 }
 
-/// Ask SteamCMD for the `installdir` of `app_id` via `+app_info_print`.
-/// Returns `None` on failure or if the field is absent from the output.
-fn fetch_installdir(login: &str, password: &str, app_id: u32) -> Option<String> {
-    let exe = steamcmd_exe();
-    println!(
-        "  [installdir] Querying SteamCMD app_info for AppID {} ...",
-        app_id
-    );
-    let output = Command::new(&exe)
-        .args([
-            "+login",
-            login,
-            password,
-            "+app_info_update",
-            "1",
-            "+app_info_print",
-            &app_id.to_string(),
-            "+quit",
-        ])
-        .output()
-        .ok()?;
 
-    let text = String::from_utf8_lossy(&output.stdout);
-    let dir = parse_installdir(&text);
-    if let Some(ref d) = dir {
-        println!("  [installdir] -> \"{}\"", d);
-    } else {
-        eprintln!("  [installdir] WARNING: could not determine installdir for AppID {} from app_info_print output.", app_id);
-    }
-    dir
-}
 
 /// Returns `%ProgramData%\SteamCMD` (defaults to `C:\ProgramData\SteamCMD`).
 pub fn steamcmd_dir() -> PathBuf {
@@ -130,19 +100,16 @@ pub fn install_steam_cmd() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Run `steamcmd.exe` to download/update a single app into a Steam-compatible
-/// library layout:
+/// Run `steamcmd.exe` to download/update a single app.
+///
+/// `+force_install_dir <library_root>` tells SteamCMD to treat `library_root`
+/// as the Steam library root.  SteamCMD itself appends `steamapps\common\<installdir>`,
+/// producing the correct layout:
 ///
 ///   `<library_root>\steamapps\common\<installdir>\`  ← game files
-///   `<library_root>\steamapps\appmanifest_<id>.acf`  ← manifest
-///
-/// `+force_install_dir` sets the **direct game install path**, NOT a library
-/// root.  To land files at the correct location we must first query the app's
-/// `installdir` value via `+app_info_print`, then pass the full path:
-///   `+force_install_dir <library_root>\steamapps\common\<installdir>`
-///
-/// The ACF is written by SteamCMD to its own `steamapps\` directory and is
-/// copied into the library's `steamapps\` after the update.
+///   `<library_root>\steamapps\appmanifest_<id>.acf`  ← manifest (may land in
+///                                                        SteamCMD's own dir;
+///                                                        copied in step 3)
 pub fn update_app(
     login: &str,
     password: &str,
@@ -154,44 +121,17 @@ pub fn update_app(
     let library_steamapps = PathBuf::from(library_root).join("steamapps");
     std::fs::create_dir_all(&library_steamapps)?;
 
-    // ── Step 1: determine installdir ─────────────────────────────────────────
-    // Check if we already have an ACF from a previous run (fast path).
     let expected_acf = library_steamapps.join(format!("appmanifest_{}.acf", app_id));
     let steamcmd_acf = steamcmd_dir()
         .join("steamapps")
         .join(format!("appmanifest_{}.acf", app_id));
 
-    let installdir = read_acf_installdir(&expected_acf)
-        .or_else(|| read_acf_installdir(&steamcmd_acf))
-        .or_else(|| fetch_installdir(login, password, app_id));
-
-    let game_install_dir = match &installdir {
-        Some(d) => {
-            let p = library_steamapps.join("common").join(d);
-            println!("  [update] install dir: {}", p.display());
-            p
-        }
-        None => {
-            // Last resort: fall back to library root so the download still
-            // proceeds, but warn loudly that layout will be wrong.
-            eprintln!(
-                "  [update] WARNING: could not determine installdir for AppID {}. \
-                 Game files will land in the library root — layout may be incorrect.",
-                app_id
-            );
-            PathBuf::from(library_root)
-        }
-    };
-
-    std::fs::create_dir_all(&game_install_dir)?;
-    let game_install_str = game_install_dir.to_string_lossy();
-
-    // ── Step 2: run the actual update ────────────────────────────────────────
+    // ── Step 1: run the update ───────────────────────────────────────────────
     let exe = steamcmd_exe();
     let status = Command::new(&exe)
         .args([
             "+force_install_dir",
-            game_install_str.as_ref(),
+            library_root,
             "+login",
             login,
             password,
@@ -212,7 +152,7 @@ pub fn update_app(
         println!("  [done]   AppID {} updated successfully.", app_id);
     }
 
-    // ── Step 3: ensure ACF is in <library_root>\steamapps\ ───────────────────
+    // ── Step 2: ensure ACF is in <library_root>\steamapps\ ───────────────────
     if expected_acf.exists() {
         println!("  [acf]    manifest present at {}", expected_acf.display());
     } else if steamcmd_acf.exists() {
@@ -227,7 +167,7 @@ pub fn update_app(
         );
     }
 
-    // ── Step 4: verify game files are where we expect them ───────────────────
+    // ── Step 3: verify game files are where we expect them ───────────────────
     if expected_acf.exists() {
         if let Some(d) = read_acf_installdir(&expected_acf) {
             let common_path = library_steamapps.join("common").join(&d);
