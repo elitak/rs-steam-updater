@@ -6,7 +6,7 @@ use std::path::Path;
 /// Top-level settings loaded from `settings.yml`.
 #[derive(Debug, Deserialize)]
 pub struct Settings {
-    /// Where to install all games. Defaults to `C:\SteamLibrary`.
+    /// Where to install all games. Defaults to `C:\Program Files (x86)\Steam`.
     pub library_root: Option<String>,
     /// Ordered map of Steam accounts. The map key is the Steam login name.
     pub accounts: IndexMap<String, Account>,
@@ -43,10 +43,10 @@ impl Settings {
         Ok(settings)
     }
 
-    /// Returns the library root, defaulting to `C:\SteamLibrary`.
+    /// Returns the library root, defaulting to `C:\Program Files (x86)\Steam`.
     pub fn library_root(&self) -> &str {
         self.library_root
             .as_deref()
-            .unwrap_or(r"C:\SteamLibrary")
+            .unwrap_or(r"C:\Program Files (x86)\Steam")
     }
 }

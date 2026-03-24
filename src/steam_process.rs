@@ -1,7 +1,9 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+#[cfg(windows)]
 use std::thread;
-use std::time::Duration;
+#[cfg(windows)]
+use std::time::{Duration, Instant};
 
 /// Returns `true` if at least one process named `steam.exe` is running.
 pub fn is_steam_running() -> bool {
@@ -42,43 +44,35 @@ pub fn find_steam_exe() -> Option<PathBuf> {
             if exists { "FOUND" } else { "not found" }
         );
         if exists {
-            println!"[steam] Using Steam.exe at: {}", path.display());
+            println!("[steam] Using Steam.exe at: {}", path.display());
             return Some(path.clone());
         }
     }
 
-    println!"[steam] Not found in well-known locations; falling back to PATH search ...";
+    println!("[steam] Not found in well-known locations; falling back to PATH search ...");
     let result = which_steam();
     match &result {
-        Some(p) => println!"[steam] Found via PATH: {}", p.display()),
-        None => println!"[steam] Steam.exe not found anywhere on PATH either.",
+        Some(p) => println!("[steam] Found via PATH: {}", p.display()),
+        None => println!("[steam] Steam.exe not found anywhere on PATH either."),
     }
     result
 }
 
-/// Attempt a graceful shutdown of Steam via `Steam.exe -shutdown`, wait 4 s,
-/// then force-kill any remaining `steam.exe` processes.
-pub fn shutdown_steam(steam_exe: Option<&PathBuf>) {
-    if let Some(exe) = steam_exe {
-        let _ = Command::new(exe).arg("-shutdown").spawn();
-        thread::sleep(Duration::from_secs(4));
-    }
-
+/// Gracefully shuts down Steam.
+///
+/// On Windows: sends `WM_CLOSE` to all windows owned by each Steam PID, then
+/// waits up to 5 seconds for the processes to exit.  Any that remain after the
+/// timeout are force-killed.
+/// On non-Windows: no-op.
+pub fn shutdown_steam(_steam_exe: Option<&PathBuf>) {
     #[cfg(windows)]
-    {
-        for pid in find_steam_pids() {
-            force_kill(pid);
-        }
-        thread::sleep(Duration::from_secs(2));
-    }
-
-    println!("[steam] Steam stopped.");
+    shutdown_steam_windows();
 }
 
-/// Launch Steam and log in as the given account.
+/// Launch Steam from the given executable path.
 /// Prints the full executable path, checks it exists on disk, reports the
 /// spawn result (PID on success, OS error on failure), and confirms completion.
-pub fn launch_steam(steam_exe: &PathBuf, login: &str, password: &str) {
+pub fn launch_steam(steam_exe: &Path, login: &str, password: &str) {
     println!("[steam] -- Relaunch sequence -------------------------------------");
     println!("[steam] Executable  : {}", steam_exe.display());
     println!("[steam] Exists on disk: {}", steam_exe.exists());
@@ -100,7 +94,9 @@ pub fn launch_steam(steam_exe: &PathBuf, login: &str, password: &str) {
             eprintln!("[steam] ERROR: Failed to spawn Steam process!");
             eprintln!("[steam]   Path   : {}", steam_exe.display());
             eprintln!("[steam]   Reason : {}", e);
-            eprintln!("[steam]   Hint   : Check that the path exists and you have execute permission.");
+            eprintln!(
+                "[steam]   Hint   : Check that the path exists and you have execute permission."
+            );
         }
     }
 
@@ -121,6 +117,72 @@ fn which_steam() -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Sends `WM_CLOSE` to every window owned by a Steam PID, then polls until
+/// all Steam processes have exited (up to 5 seconds).  Remaining processes are
+/// force-killed.
+#[cfg(windows)]
+fn shutdown_steam_windows() {
+    use windows_sys::Win32::UI::WindowsAndMessaging::EnumWindows;
+
+    let steam_pids = find_steam_pids();
+    if steam_pids.is_empty() {
+        println!("[steam] No Steam processes found to shut down.");
+        return;
+    }
+
+    println!("[steam] Sending WM_CLOSE to all Steam windows ...");
+
+    // Pass the Vec<u32> via LPARAM (a pointer-sized integer).
+    let raw: *mut Vec<u32> = Box::into_raw(Box::new(steam_pids));
+    unsafe {
+        EnumWindows(Some(enum_steam_windows_proc), raw as isize);
+        drop(Box::from_raw(raw));
+    }
+
+    // Poll up to 5 s for all Steam PIDs to disappear.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let remaining = find_steam_pids();
+        if remaining.is_empty() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            eprintln!("[steam] Timed out waiting for Steam to exit; force-killing ...");
+            for pid in remaining {
+                force_kill(pid);
+            }
+            break;
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+
+    println!("[steam] Steam stopped.");
+}
+
+/// `EnumWindows` callback: posts `WM_CLOSE` to each top-level window whose
+/// owning process is in the Steam PID list passed via `lparam`.
+#[cfg(windows)]
+unsafe extern "system" fn enum_steam_windows_proc(
+    hwnd: windows_sys::Win32::Foundation::HWND,
+    lparam: windows_sys::Win32::Foundation::LPARAM,
+) -> windows_sys::Win32::Foundation::BOOL {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetWindowThreadProcessId, PostMessageW, WM_CLOSE,
+    };
+
+    let pids = if lparam == 0 {
+        return 1;
+    } else {
+        &*(lparam as *const Vec<u32>)
+    };
+    let mut process_id: u32 = 0;
+    GetWindowThreadProcessId(hwnd, &mut process_id);
+    if pids.contains(&process_id) {
+        PostMessageW(hwnd, WM_CLOSE, 0, 0);
+    }
+    1 // TRUE – continue enumeration
 }
 
 #[cfg(windows)]
@@ -173,7 +235,7 @@ fn force_kill(pid: u32) {
 
     unsafe {
         let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
-        if !handle.is_null() {
+        if handle != 0 {
             TerminateProcess(handle, 1);
             CloseHandle(handle);
         }
