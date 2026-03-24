@@ -15,7 +15,7 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    // ── 1. Locate settings.yml next to the executable ─────────────────────────
+    // \u{2500}\u{2500} 1. Locate settings.yml next to the executable \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(PathBuf::from))
@@ -24,7 +24,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let settings = settings::Settings::load(&settings_path)?;
     let library_root = settings.library_root().to_string();
 
-    // ── 2. First account — used to relaunch Steam after updates ───────────────
+    // \u{2500}\u{2500} 2. First account \u{2014} used to relaunch Steam after updates \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}
     let (first_login, first_account) = settings
         .accounts
         .iter()
@@ -36,7 +36,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .clone()
         .unwrap_or_default();
 
-    // ── 3. Detect and optionally stop Steam ───────────────────────────────────
+    // \u{2500}\u{2500} 3. Detect and optionally stop Steam \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}
     let steam_was_open = steam_process::is_steam_running();
     let steam_exe = steam_process::find_steam_exe();
 
@@ -53,10 +53,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         steam_process::shutdown_steam(steam_exe.as_ref());
     }
 
-    // ── 4. Bootstrap SteamCMD ─────────────────────────────────────────────────
+    // \u{2500}\u{2500} 4. Bootstrap SteamCMD \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}
     steam_cmd::install_steam_cmd()?;
 
-    // ── 5. Update all apps ────────────────────────────────────────────────────
+    // \u{2500}\u{2500} 5. Update all apps \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}
     println!("\n[config] Library root : {}", library_root);
     std::fs::create_dir_all(&library_root)?;
 
@@ -83,7 +83,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
 
-        // Resolve appREs → additional appIDs
+        // Resolve appREs \u{2192} additional appIDs
         let mut resolved_ids: Vec<u32> = Vec::new();
         if !account.app_res.is_empty() {
             // Fetch the catalogue the first time it's needed
@@ -117,17 +117,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n[all done] Steam library update complete.");
 
-    // ── 6. Relaunch Steam (if it was running before we started) ───────────────
-    if steam_was_open {
-        match &steam_exe {
-            Some(exe) => {
-                steam_process::launch_steam(exe, &first_login, &first_password);
-            }
-            None => {
-                eprintln!(
-                    "[warn] Could not find Steam.exe -- please start Steam manually."
-                );
-            }
+    // \u{2500}\u{2500} 6. Launch Steam \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}
+    // Always launch Steam after updates, regardless of whether it was open before.
+    println!("\n[steam] Preparing to launch Steam ...");
+    match &steam_exe {
+        Some(exe) => {
+            steam_process::launch_steam(exe, &first_login, &first_password);
+        }
+        None => {
+            eprintln!(
+                "[warn] Could not find Steam.exe -- please start Steam manually."
+            );
         }
     }
 
