@@ -76,6 +76,14 @@ pub fn install_steam_cmd() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Run `steamcmd.exe` to download/update a single app.
+///
+/// `library_root` must be the root of a Steam library that already has (or
+/// will have) a `steamapps/` subdirectory — e.g.
+/// `C:\Program Files (x86)\Steam` or `D:\SteamLibrary`.
+/// SteamCMD will write:
+///   `<library_root>/steamapps/appmanifest_<id>.acf`
+///   `<library_root>/steamapps/common/<game name>/...`
+///   `<library_root>/steamapps/libraryfolders.vdf`
 pub fn update_app(
     login: &str,
     password: &str,
@@ -83,6 +91,10 @@ pub fn update_app(
     library_root: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("  [update] AppID {}  (account: {})", app_id, login);
+
+    // Ensure steamapps/ exists so SteamCMD treats this path as a library root.
+    let steamapps_dir = PathBuf::from(library_root).join("steamapps");
+    std::fs::create_dir_all(&steamapps_dir)?;
 
     let exe = steamcmd_exe();
     let status = Command::new(&exe)
