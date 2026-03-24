@@ -42,16 +42,16 @@ pub fn find_steam_exe() -> Option<PathBuf> {
             if exists { "FOUND" } else { "not found" }
         );
         if exists {
-            println!"[steam] Using Steam.exe at: {}", path.display());
+            println!("[steam] Using Steam.exe at: {}", path.display());
             return Some(path.clone());
         }
     }
 
-    println!"[steam] Not found in well-known locations; falling back to PATH search ...";
+    println!("[steam] Not found in well-known locations; falling back to PATH search ...");
     let result = which_steam();
     match &result {
-        Some(p) => println!"[steam] Found via PATH: {}", p.display()),
-        None => println!"[steam] Steam.exe not found anywhere on PATH either.",
+        Some(p) => println!("[steam] Found via PATH: {}", p.display()),
+        None => println!("[steam] Steam.exe not found anywhere on PATH either."),
     }
     result
 }

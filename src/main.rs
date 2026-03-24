@@ -3,6 +3,7 @@ mod settings;
 mod steam_api;
 mod steam_cmd;
 mod steam_process;
+mod vdf;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -62,6 +63,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // Lazy-loaded Steam app catalogue (fetched at most once)
     let mut app_list_cache: Option<Vec<(u32, String)>> = None;
+    // Accumulate every app ID that was successfully dispatched for updating.
+    let mut all_updated_ids: Vec<u32> = Vec::new();
 
     for (account_name, account) in &settings.accounts {
         let password = match &account.password {
@@ -112,10 +115,35 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
         for app_id in &all_ids {
             steam_cmd::update_app(account_name, password, *app_id, &library_root)?;
+            all_updated_ids.push(*app_id);
         }
     }
 
     println!("\n[all done] Steam library update complete.");
+
+    // ── Ensure libraryfolders.vdf knows about our library ──────────────────
+    if let Some(ref exe) = steam_exe {
+        if let Some(steam_dir) = exe.parent() {
+            println!("\n[vdf] Verifying libraryfolders.vdf ...");
+            // Dedup IDs before passing to the VDF updater.
+            all_updated_ids.sort_unstable();
+            all_updated_ids.dedup();
+            if let Err(e) = vdf::ensure_library_registered(
+                steam_dir,
+                &library_root,
+                &all_updated_ids,
+            ) {
+                eprintln!("[vdf] WARNING: could not update libraryfolders.vdf: {}", e);
+            }
+        } else {
+            eprintln!("[vdf] WARNING: could not determine Steam directory from exe path.");
+        }
+    } else {
+        eprintln!(
+            "[vdf] WARNING: Steam.exe not found — skipping libraryfolders.vdf update.  \
+             Register the library manually in Steam → Settings → Storage."
+        );
+    }
 
     // \u{2500}\u{2500} 6. Launch Steam \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}
     // Always launch Steam after updates, regardless of whether it was open before.
