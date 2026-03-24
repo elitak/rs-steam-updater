@@ -16,6 +16,7 @@ pub fn is_steam_running() -> bool {
 }
 
 /// Search well-known locations for `Steam.exe`, returning the first found.
+/// Logs every candidate path and whether it exists on disk.
 pub fn find_steam_exe() -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = vec![
         PathBuf::from(r"C:\Program Files (x86)\Steam\Steam.exe"),
@@ -29,14 +30,30 @@ pub fn find_steam_exe() -> Option<PathBuf> {
         candidates.push(PathBuf::from(&pf86).join("Steam").join("Steam.exe"));
     }
 
+    println!(
+        "[steam] Searching for Steam.exe in {} candidate location(s):",
+        candidates.len()
+    );
     for path in &candidates {
-        if path.exists() {
+        let exists = path.exists();
+        println!(
+            "[steam]   {} -> {}",
+            path.display(),
+            if exists { "FOUND" } else { "not found" }
+        );
+        if exists {
+            println!(["steam] Using Steam.exe at: {}", path.display());
             return Some(path.clone());
         }
     }
 
-    // Fall back to PATH search
-    which_steam()
+    println!(["steam] Not found in well-known locations; falling back to PATH search ...");
+    let result = which_steam();
+    match &result {
+        Some(p) => println!("[steam] Found via PATH: {}", p.display()),
+        None => println!("[steam] Steam.exe not found anywhere on PATH either."),
+    }
+    result
 }
 
 /// Attempt a graceful shutdown of Steam via `Steam.exe -shutdown`, wait 4 s,
@@ -59,11 +76,35 @@ pub fn shutdown_steam(steam_exe: Option<&PathBuf>) {
 }
 
 /// Launch Steam and log in as the given account.
+/// Prints the full executable path, checks it exists on disk, reports the
+/// spawn result (PID on success, OS error on failure), and confirms completion.
 pub fn launch_steam(steam_exe: &PathBuf, login: &str, password: &str) {
-    println!("[steam] Relaunching Steam as '{}' ...", login);
-    let _ = Command::new(steam_exe)
+    println!("[steam] -- Relaunch sequence -------------------------------------");
+    println!("[steam] Executable  : {}", steam_exe.display());
+    println!("[steam] Exists on disk: {}", steam_exe.exists());
+    println!("[steam] Arguments   : -login {} ****", login);
+    println!("[steam] Spawning process ...");
+
+    match Command::new(steam_exe)
         .args(["-login", login, password])
-        .spawn();
+        .spawn()
+    {
+        Ok(child) => {
+            println!(
+                "[steam] Spawn succeeded -- Steam process started with PID {}.",
+                child.id()
+            );
+            println!("[steam] Steam is now running in the background.");
+        }
+        Err(e) => {
+            eprintln!("[steam] ERROR: Failed to spawn Steam process!");
+            eprintln!("[steam]   Path   : {}", steam_exe.display());
+            eprintln!("[steam]   Reason : {}", e);
+            eprintln!("[steam]   Hint   : Check that the path exists and you have execute permission.");
+        }
+    }
+
+    println!("[steam] -- End of relaunch sequence ------------------------------");
 }
 
 // ── private helpers ──────────────────────────────────────────────────────────
