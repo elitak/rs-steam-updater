@@ -88,11 +88,13 @@ mod imp {
                     _ => DefWindowProcW(hwnd, msg, wparam, lparam),
                 }
             }
-            // WM_CLOSE is sent when the user clicks the X button on the title bar.
-            // Treat it the same as "Abort" so SHOULD_PROCEED stays false.
+            // WM_CLOSE is sent either by the X button or posted programmatically
+            // by the timer / "Do It Now" after they have already set SHOULD_PROCEED.
+            // Do NOT touch SHOULD_PROCEED here — it is already correct:
+            //   • timer / Do It Now: set it true before posting WM_CLOSE
+            //   • X button: left at its initial false value
             WM_CLOSE => {
                 KillTimer(hwnd, TIMER_ID);
-                SHOULD_PROCEED.store(false, Ordering::SeqCst);
                 // Let DefWindowProcW call DestroyWindow, which posts WM_DESTROY.
                 DefWindowProcW(hwnd, msg, wparam, lparam)
             }
