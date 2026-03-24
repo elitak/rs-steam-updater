@@ -16,6 +16,7 @@ reqwest = { version = "0.12", features = ["blocking", "rustls-tls", "json"], def
 regex = "1"
 zip = "2"
 indexmap = { version = "2", features = ["serde"] }
+ctrlc = { version = "3", features = ["termination"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
