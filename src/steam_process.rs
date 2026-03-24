@@ -42,16 +42,16 @@ pub fn find_steam_exe() -> Option<PathBuf> {
             if exists { "FOUND" } else { "not found" }
         );
         if exists {
-            println!([steam] Using Steam.exe at: {}, path.display());
+            println!("[steam] Using Steam.exe at: {}", path.display());
             return Some(path.clone());
         }
     }
 
-    println!([steam] Not found in well-known locations; falling back to PATH search ...);
+    println!([steam] Not found in well-known locations; falling back to PATH search ...");
     let result = which_steam();
     match &result {
-        Some(p) => println!([steam] Found via PATH: {}, p.display()),
-        None => println!([steam] Steam.exe not found anywhere on PATH either.),
+        Some(p) => println!([steam] Found via PATH: {}, p.display());
+        None => println!([steam] Steam.exe not found anywhere on PATH either.);
     }
     result
 }
@@ -105,7 +105,8 @@ pub fn launch_steam(steam_exe: &PathBuf, login: &str, password: &str) {
 }
 
 // ── private helpers ──────────────────────────────────────────────────────────
-fnt which_steam() -> Option<PathBuf> {
+
+fn which_steam() -> Option<PathBuf> {
     // On Windows PATH entries are separated by ';'
     let separator = if cfg!(windows) { ';' } else { ':' };
     if let Ok(path_var) = std::env::var("PATH") {
@@ -120,7 +121,7 @@ fnt which_steam() -> Option<PathBuf> {
 }
 
 #[cfg(windows)]
-fnt find_steam_pids() -> Vec<u32> {
+fn find_steam_pids() -> Vec<u32> {
     use std::mem;
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
@@ -161,7 +162,7 @@ fnt find_steam_pids() -> Vec<u32> {
 }
 
 #[cfg(windows)]
-fnt force_kill(pid: u32) {
+fn force_kill(pid: u32) {
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::System::Threading::{
         OpenProcess, TerminateProcess, PROCESS_TERMINATE,
