@@ -102,14 +102,22 @@ pub fn install_steam_cmd() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Run `steamcmd.exe` to download/update a single app.
 ///
-/// `+force_install_dir <library_root>` tells SteamCMD to treat `library_root`
-/// as the Steam library root.  SteamCMD itself appends `steamapps\common\<installdir>`,
-/// producing the correct layout:
+/// `+force_install_dir <library_root>` is passed unchanged.  When SteamCMD
+/// runs against a directory that does NOT yet have a pre-created `steamapps\`
+/// folder it builds the full layout on its own:
 ///
 ///   `<library_root>\steamapps\common\<installdir>\`  ← game files
-///   `<library_root>\steamapps\appmanifest_<id>.acf`  ← manifest (may land in
-///                                                        SteamCMD's own dir;
-///                                                        copied in step 3)
+///   `<library_root>\steamapps\appmanifest_<id>.acf`  ← manifest
+///
+/// Critically: we must NOT pre-create `<library_root>\steamapps\` before
+/// calling SteamCMD.  If that directory already exists SteamCMD treats the
+/// path as a direct install target and dumps files straight into
+/// `<library_root>\` instead of creating the steamapps layout.
+///
+/// SteamCMD also writes a duplicate ACF inside the game directory itself
+/// (`<installdir>\steamapps\appmanifest_<id>.acf`).  After the update we
+/// promote that ACF to the library root (if the library-level copy is absent)
+/// and delete the now-empty `<installdir>\steamapps\` artefact.
 pub fn update_app(
     login: &str,
     password: &str,
@@ -118,8 +126,11 @@ pub fn update_app(
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("  [update] AppID {}  (account: {})", app_id, login);
 
+    // Do NOT create <library_root>\steamapps\ here — let SteamCMD do it.
+    // Pre-creating it causes SteamCMD to install files directly into
+    // library_root instead of creating the steamapps\common\<installdir>
+    // subtree.
     let library_steamapps = PathBuf::from(library_root).join("steamapps");
-    std::fs::create_dir_all(&library_steamapps)?;
 
     let expected_acf = library_steamapps.join(format!("appmanifest_{}.acf", app_id));
     let steamcmd_acf = steamcmd_dir()
@@ -153,9 +164,15 @@ pub fn update_app(
     }
 
     // ── Step 2: ensure ACF is in <library_root>\steamapps\ ───────────────────
+    // SteamCMD may write the ACF to its own steamapps\ dir.  Some versions
+    // also write a copy inside the game dir at
+    //   <library_root>\steamapps\common\<installdir>\steamapps\appmanifest_<id>.acf
+    // We prefer the library-level copy; if absent we pull from SteamCMD's dir.
     if expected_acf.exists() {
         println!("  [acf]    manifest present at {}", expected_acf.display());
     } else if steamcmd_acf.exists() {
+        // Ensure destination directory exists before copying.
+        std::fs::create_dir_all(&library_steamapps)?;
         println!("  [acf]    manifest found in SteamCMD dir — copying to library ...");
         std::fs::copy(&steamcmd_acf, &expected_acf)?;
         println!("  [acf]    copied to {}", expected_acf.display());
@@ -167,20 +184,61 @@ pub fn update_app(
         );
     }
 
-    // ── Step 3: verify game files are where we expect them ───────────────────
+    // ── Step 3: clean up spurious <installdir>\steamapps\ artefact ───────────
+    // SteamCMD creates a <game_dir>\steamapps\ subdirectory containing only a
+    // duplicate ACF and a few empty tracking dirs.  It is not part of the game
+    // and confuses users.  Promote the ACF (if we still need it) and delete
+    // the folder if it contains nothing but SteamCMD bookkeeping.
     if expected_acf.exists() {
-        if let Some(d) = read_acf_installdir(&expected_acf) {
-            let common_path = library_steamapps.join("common").join(&d);
-            if common_path.exists() {
-                println!("  [files]  {} — OK", common_path.display());
+        if let Some(installdir) = read_acf_installdir(&expected_acf) {
+            let game_dir = library_steamapps.join("common").join(&installdir);
+            let inner_steamapps = game_dir.join("steamapps");
+            let inner_acf = inner_steamapps.join(format!("appmanifest_{}.acf", app_id));
+
+            if inner_acf.exists() {
+                // Remove the duplicate inner ACF; the library-level one is canonical.
+                let _ = std::fs::remove_file(&inner_acf);
+            }
+
+            // Delete the inner steamapps\ dir if it is now empty (or only has
+            // empty subdirectories that SteamCMD creates for bookkeeping).
+            if inner_steamapps.exists() {
+                if dir_is_empty_or_only_empty_subdirs(&inner_steamapps) {
+                    let _ = std::fs::remove_dir_all(&inner_steamapps);
+                    println!("  [clean]  removed spurious steamapps artefact from game directory.");
+                }
+            }
+
+            // ── Step 4: verify game files ────────────────────────────────────
+            if game_dir.exists() {
+                println!("  [files]  {} — OK", game_dir.display());
             } else {
                 eprintln!(
                     "  [files]  WARNING: expected game directory not found: {}",
-                    common_path.display()
+                    game_dir.display()
                 );
             }
         }
     }
 
     Ok(())
+}
+
+/// Returns `true` if `dir` contains no files at any depth — only empty
+/// directories (or itself is empty).  Used to decide whether the spurious
+/// `<game>\steamapps\` folder left by SteamCMD is safe to delete.
+fn dir_is_empty_or_only_empty_subdirs(dir: &std::path::Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() {
+            return false;
+        }
+        if path.is_dir() && !dir_is_empty_or_only_empty_subdirs(&path) {
+            return false;
+        }
+    }
+    true
 }
