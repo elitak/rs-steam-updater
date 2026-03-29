@@ -114,6 +114,10 @@ pub fn install_steam_cmd() -> Result<(), Box<dyn std::error::Error>> {
 /// path as a direct install target and dumps files straight into
 /// `<library_root>\` instead of creating the steamapps layout.
 ///
+/// SteamCMD also unconditionally writes `steam.dll` and `libraryfolder.vdf`
+/// (its own runtime artefacts) into the `+force_install_dir` path.  These
+/// are unrelated to the game and are deleted after the update.
+///
 /// SteamCMD also writes a duplicate ACF inside the game directory itself
 /// (`<installdir>\steamapps\appmanifest_<id>.acf`).  After the update we
 /// promote that ACF to the library root (if the library-level copy is absent)
@@ -163,7 +167,22 @@ pub fn update_app(
         println!("  [done]   AppID {} updated successfully.", app_id);
     }
 
-    // ── Step 2: ensure ACF is in <library_root>\steamapps\ ───────────────────
+    // ── Step 2: remove SteamCMD runtime artefacts from the library root ───────
+    // SteamCMD unconditionally writes steam.dll and libraryfolder.vdf (note:
+    // singular, not the libraryfolders.vdf we manage) into the directory passed
+    // to +force_install_dir.  They are SteamCMD's own runtime files and are not
+    // needed by Steam.exe or by any game.
+    for artefact in &["steam.dll", "libraryfolder.vdf"] {
+        let p = PathBuf::from(library_root).join(artefact);
+        if p.exists() {
+            match std::fs::remove_file(&p) {
+                Ok(_) => println!("  [clean]  removed SteamCMD artefact: {}", p.display()),
+                Err(e) => eprintln!("  [clean]  could not remove {}: {}", p.display(), e),
+            }
+        }
+    }
+
+    // ── Step 3: ensure ACF is in <library_root>\steamapps\ ───────────────────
     // SteamCMD may write the ACF to its own steamapps\ dir.  Some versions
     // also write a copy inside the game dir at
     //   <library_root>\steamapps\common\<installdir>\steamapps\appmanifest_<id>.acf
@@ -184,7 +203,7 @@ pub fn update_app(
         );
     }
 
-    // ── Step 3: clean up spurious <installdir>\steamapps\ artefact ───────────
+    // ── Step 4: clean up spurious <installdir>\steamapps\ artefact ───────────
     // SteamCMD creates a <game_dir>\steamapps\ subdirectory containing only a
     // duplicate ACF and a few empty tracking dirs.  It is not part of the game
     // and confuses users.  Promote the ACF (if we still need it) and delete
@@ -209,7 +228,7 @@ pub fn update_app(
                 }
             }
 
-            // ── Step 4: verify game files ────────────────────────────────────
+            // ── Step 5: verify game files ────────────────────────────────────
             if game_dir.exists() {
                 println!("  [files]  {} — OK", game_dir.display());
             } else {
