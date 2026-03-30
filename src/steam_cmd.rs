@@ -1,8 +1,38 @@
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 const STEAMCMD_URL: &str =
     "https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip";
+
+/// PID of the currently running SteamCMD child process, or 0 when idle.
+static STEAMCMD_PID: AtomicU32 = AtomicU32::new(0);
+
+/// Kill the currently running SteamCMD process, if any.
+pub fn kill_current_steamcmd() {
+    let pid = STEAMCMD_PID.load(Ordering::SeqCst);
+    if pid != 0 {
+        kill_pid(pid);
+    }
+}
+
+#[cfg(windows)]
+fn kill_pid(pid: u32) {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+    unsafe {
+        let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
+        if handle != 0 {
+            TerminateProcess(handle, 1);
+            CloseHandle(handle);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn kill_pid(_pid: u32) {
+    // Non-Windows stub; this application targets Windows.
+}
 
 // ── ACF helpers ──────────────────────────────────────────────────────────────
 
@@ -39,6 +69,85 @@ pub fn steamcmd_dir() -> PathBuf {
 /// Returns the path to `steamcmd.exe`.
 pub fn steamcmd_exe() -> PathBuf {
     steamcmd_dir().join("steamcmd.exe")
+}
+
+/// Ensures `<steamcmd_dir>\steamapps` is a directory symlink pointing at
+/// `<library_root>\steamapps`.
+///
+/// With this symlink in place SteamCMD writes game files directly into the
+/// target library, so no post-update file movement is required.
+///
+/// If `<steamcmd_dir>\steamapps` already exists as a real directory (left over
+/// from a previous run of the old move-based code), any `.acf` manifest files
+/// inside it are copied to the target before the directory is removed and the
+/// symlink is created.
+pub fn setup_steamapps_symlink(library_root: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let link = steamcmd_dir().join("steamapps");
+    let target = PathBuf::from(library_root).join("steamapps");
+
+    // Ensure the target directory exists.
+    std::fs::create_dir_all(&target)?;
+
+    // Inspect whatever currently lives at the link path.
+    match std::fs::symlink_metadata(&link) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            let current = std::fs::read_link(&link)?;
+            if current == target {
+                println!(
+                    "[symlink] steamapps link already correct ({} -> {}).",
+                    link.display(),
+                    target.display()
+                );
+                return Ok(());
+            }
+            // Wrong target — remove and fall through to recreate.
+            println!(
+                "[symlink] Updating steamapps link (was {}).",
+                current.display()
+            );
+            #[cfg(windows)]
+            std::fs::remove_dir(&link)?;
+            #[cfg(not(windows))]
+            std::fs::remove_file(&link)?;
+        }
+        Ok(_) => {
+            // Real directory from a previous run — migrate ACF files then remove.
+            println!(
+                "[symlink] Migrating existing steamapps directory to {} ...",
+                target.display()
+            );
+            for entry in std::fs::read_dir(&link)? {
+                let entry = entry?;
+                let name = entry.file_name();
+                if name.to_string_lossy().ends_with(".acf") {
+                    let dest = target.join(&name);
+                    if dest.exists() {
+                        println!("[symlink] Keeping existing {}", dest.display());
+                    } else {
+                        std::fs::copy(entry.path(), &dest)?;
+                        println!("[symlink] Migrated {}", dest.display());
+                    }
+                }
+            }
+            std::fs::remove_dir_all(&link)?;
+        }
+        Err(_) => {
+            // Does not exist — nothing to clean up.
+        }
+    }
+
+    println!(
+        "[symlink] {} -> {}",
+        link.display(),
+        target.display()
+    );
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(&target, &link)?;
+    #[cfg(not(windows))]
+    std::os::unix::fs::symlink(&target, &link)?;
+
+    println!("[symlink] steamapps symlink created successfully.");
+    Ok(())
 }
 
 /// Download and install SteamCMD if it is not already present.
@@ -100,23 +209,15 @@ pub fn install_steam_cmd() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Run `steamcmd.exe` to download/update a single app, then move the result
-/// into the target library.
+/// Run `steamcmd.exe` to download/update a single app.
 ///
-/// SteamCMD is invoked WITHOUT `+force_install_dir`.  It installs/updates the
-/// app inside its own working directory:
+/// Because `<steamcmd_dir>\steamapps` is symlinked to `<library_root>\steamapps`
+/// (set up by [`setup_steamapps_symlink`] before the first call), SteamCMD
+/// writes game files directly into the library — no post-update file movement
+/// is needed.
 ///
-///   `<steamcmd_dir>\steamapps\common\<installdir>\`  ← game files
-///   `<steamcmd_dir>\steamapps\appmanifest_<id>.acf`  ← manifest
-///
-/// After the update the game directory is moved into the target library:
-///
-///   `<library_root>\steamapps\common\<installdir>\`
-///   `<library_root>\steamapps\appmanifest_<id>.acf`
-///
-/// To keep subsequent runs incremental (avoiding a full re-download each time),
-/// before calling SteamCMD we move the game directory back from the library
-/// into SteamCMD's own steamapps if the files are absent there.
+/// The spawned SteamCMD process PID is stored in [`STEAMCMD_PID`] so that a
+/// Ctrl-C handler can terminate it promptly.
 pub fn update_app(
     login: &str,
     password: &str,
@@ -125,37 +226,9 @@ pub fn update_app(
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("  [update] AppID {}  (account: {})", app_id, login);
 
-    let steamcmd_steamapps = steamcmd_dir().join("steamapps");
-    let steamcmd_acf = steamcmd_steamapps
-        .join(format!("appmanifest_{}.acf", app_id));
-
-    let library_steamapps = PathBuf::from(library_root).join("steamapps");
-    let library_acf = library_steamapps
-        .join(format!("appmanifest_{}.acf", app_id));
-
-    // ── Step 1: restore game files to SteamCMD dir for incremental update ────
-    // If the game already lives in the library (from a previous run), move it
-    // back to SteamCMD's steamapps\common\ so SteamCMD can update it in-place
-    // rather than downloading everything from scratch.
-    if let Some(installdir) = read_acf_installdir(&library_acf)
-        .or_else(|| read_acf_installdir(&steamcmd_acf))
-    {
-        let lib_game = library_steamapps.join("common").join(&installdir);
-        let cmd_game = steamcmd_steamapps.join("common").join(&installdir);
-        if lib_game.exists() && !cmd_game.exists() {
-            println!(
-                "  [prep]   restoring {} to SteamCMD dir for incremental update ...",
-                installdir
-            );
-            std::fs::create_dir_all(cmd_game.parent().unwrap())?;
-            move_dir(&lib_game, &cmd_game)?;
-            println!("  [prep]   done.");
-        }
-    }
-
-    // ── Step 2: run the update ───────────────────────────────────────────────
+    // ── Run the update ────────────────────────────────────────────────────────
     let exe = steamcmd_exe();
-    let status = Command::new(&exe)
+    let mut child = Command::new(&exe)
         .args([
             "+login",
             login,
@@ -165,7 +238,11 @@ pub fn update_app(
             "validate",
             "+quit",
         ])
-        .status()?;
+        .spawn()?;
+
+    STEAMCMD_PID.store(child.id(), Ordering::SeqCst);
+    let status = child.wait()?;
+    STEAMCMD_PID.store(0, Ordering::SeqCst);
 
     if !status.success() {
         eprintln!(
@@ -177,97 +254,20 @@ pub fn update_app(
         println!("  [done]   AppID {} updated successfully.", app_id);
     }
 
-    // ── Step 3: move game directory from SteamCMD to library ─────────────────
-    let installdir = match read_acf_installdir(&steamcmd_acf) {
-        Some(d) => d,
-        None => {
-            eprintln!(
-                "  [error]  Could not read installdir from {:?} — \
-                 game files remain in SteamCMD dir.",
-                steamcmd_acf
-            );
-            return Ok(());
-        }
-    };
-
-    let cmd_game = steamcmd_steamapps.join("common").join(&installdir);
-    let lib_game = library_steamapps.join("common").join(&installdir);
-
-    if cmd_game.exists() {
-        std::fs::create_dir_all(lib_game.parent().unwrap())?;
-        if lib_game.exists() {
-            println!("  [move]   removing stale library copy ...");
-            std::fs::remove_dir_all(&lib_game)?;
-        }
-        println!(
-            "  [move]   {} → {}",
-            cmd_game.display(),
-            lib_game.display()
-        );
-        move_dir(&cmd_game, &lib_game)?;
-        println!("  [move]   done.");
-    } else {
-        eprintln!(
-            "  [warning] SteamCMD game dir not found at {} — \
-             nothing to move.",
-            cmd_game.display()
-        );
-    }
-
-    // ── Step 4: copy ACF to library ───────────────────────────────────────────
-    // SteamCMD's own ACF stays in place so the next run is incremental.
-    // The library copy is what Steam.exe reads to discover the installation.
-    if steamcmd_acf.exists() {
-        std::fs::create_dir_all(&library_steamapps)?;
-        std::fs::copy(&steamcmd_acf, &library_acf)?;
-        println!("  [acf]    copied to {}", library_acf.display());
-    } else {
-        eprintln!(
-            "  [acf]    WARNING: appmanifest_{}.acf not found in SteamCMD dir.",
-            app_id
-        );
-    }
-
-    // ── Step 5: verify ────────────────────────────────────────────────────────
-    if lib_game.exists() {
-        println!("  [files]  {} — OK", lib_game.display());
-    } else {
-        eprintln!(
-            "  [files]  WARNING: expected game directory not found: {}",
-            lib_game.display()
-        );
-    }
-
-    Ok(())
-}
-
-/// Move `src` to `dst`.  Tries an atomic rename first; falls back to a
-/// recursive copy + delete when rename fails (e.g. cross-device move).
-fn move_dir(src: &std::path::Path, dst: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
-    if std::fs::rename(src, dst).is_ok() {
-        return Ok(());
-    }
-    // Cross-device or other rename failure — copy recursively then delete src.
-    copy_dir_recursive(src, dst)?;
-    std::fs::remove_dir_all(src)?;
-    Ok(())
-}
-
-/// Recursively copy the contents of `src` into `dst` (creating `dst` if needed).
-fn copy_dir_recursive(
-    src: &std::path::Path,
-    dst: &std::path::Path,
-) -> Result<(), Box<dyn std::error::Error>> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
-        if src_path.is_dir() {
-            copy_dir_recursive(&src_path, &dst_path)?;
+    // ── Verify ────────────────────────────────────────────────────────────────
+    let library_steamapps = PathBuf::from(library_root).join("steamapps");
+    let acf = library_steamapps.join(format!("appmanifest_{}.acf", app_id));
+    if let Some(installdir) = read_acf_installdir(&acf) {
+        let game_dir = library_steamapps.join("common").join(&installdir);
+        if game_dir.exists() {
+            println!("  [files]  {} — OK", game_dir.display());
         } else {
-            std::fs::copy(&src_path, &dst_path)?;
+            eprintln!(
+                "  [files]  WARNING: expected game directory not found: {}",
+                game_dir.display()
+            );
         }
     }
+
     Ok(())
 }
