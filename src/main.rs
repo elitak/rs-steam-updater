@@ -61,6 +61,19 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n[config] Library root : {}", library_root);
     std::fs::create_dir_all(&library_root)?;
 
+    // Symlink steamcmd's steamapps directory to the target library so SteamCMD
+    // writes game files directly there \u{2014} no post-update file movement needed.
+    steam_cmd::setup_steamapps_symlink(&library_root)?;
+
+    // Register a Ctrl-C handler that kills the active SteamCMD process and
+    // exits immediately, preventing SteamCMD from running unsupervised.
+    ctrlc::set_handler(move || {
+        println!("\n[ctrlc] Interrupt received \u{2014} killing SteamCMD ...");
+        steam_cmd::kill_current_steamcmd();
+        std::process::exit(1);
+    })
+    .expect("Error setting Ctrl-C handler");
+
     // Lazy-loaded Steam app catalogue (fetched at most once)
     let mut app_list_cache: Option<Vec<(u32, String)>> = None;
     // Accumulate every app ID that was successfully dispatched for updating.
